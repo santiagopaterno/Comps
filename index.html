@@ -55,6 +55,12 @@
     // ─── FMP API FETCHER ─────────────────────────────────────────────
     const FMP_BASE = "https://financialmodelingprep.com/stable";
 
+    async function safeJson(res) {
+      const text = await res.text();
+      try { return JSON.parse(text); }
+      catch { throw new Error(text.slice(0, 120)); }
+    }
+
     async function fetchCompanyData(ticker, apiKey) {
       const [profileRes, isRes, bsRes] = await Promise.all([
         fetch(`${FMP_BASE}/profile?symbol=${ticker}&apikey=${apiKey}`),
@@ -64,9 +70,9 @@
 
       if (!profileRes.ok) throw new Error(`API returned ${profileRes.status} for ${ticker}. Check your API key.`);
 
-      const profile = await profileRes.json();
-      const income = await isRes.json();
-      const balance = await bsRes.json();
+      const profile = await safeJson(profileRes);
+      const income = await safeJson(isRes).catch(() => []);
+      const balance = await safeJson(bsRes).catch(() => []);
 
       // Debug: log raw responses to console so you can inspect
       console.log(`[${ticker}] profile:`, profile);
@@ -365,11 +371,13 @@
         setLoading(true); setError(null);
         try {
           const targetData = calcMultiples(await fetchCompanyData(targetTicker.trim(), apiKey.trim()));
-          const peerPromises = peerTickers.map(t => fetchCompanyData(t.trim(), apiKey.trim()).catch(e => null));
+          const failedPeers = [];
+          const peerPromises = peerTickers.map(t => fetchCompanyData(t.trim(), apiKey.trim()).catch(e => { failedPeers.push(t); console.warn(`[${t}] failed:`, e.message); return null; }));
           const peerResults = (await Promise.all(peerPromises)).filter(Boolean).map(calcMultiples);
-          if (peerResults.length < 2) throw new Error("Could not fetch enough peers. Check tickers and API key.");
+          if (peerResults.length < 2) throw new Error("Could not fetch enough peers. Check tickers and API key. Failed: " + failedPeers.join(", "));
           const stats = calcStats(peerResults);
           setResults({target:targetData, peers:peerResults, stats});
+          if (failedPeers.length) setError(`Warning: Could not load ${failedPeers.join(", ")} — data may require a paid FMP plan. Analysis built with ${peerResults.length} peers.`);
         } catch(e) {
           setError(e.message);
         }
@@ -474,7 +482,7 @@
               )}
             </div>
 
-            {error && <div style={{marginTop:14,padding:"10px 14px",background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:6,color:"#f09090",fontSize:12}}>{error}</div>}
+            {error && <div style={{marginTop:14,padding:"10px 14px",background:error.startsWith("Warning")?"rgba(255,183,77,0.08)":"rgba(239,68,68,0.08)",border:error.startsWith("Warning")?"1px solid rgba(255,183,77,0.2)":"1px solid rgba(239,68,68,0.2)",borderRadius:6,color:error.startsWith("Warning")?"#ffb74d":"#f09090",fontSize:12}}>{error}</div>}
           </Section>
 
           {/* Results */}
