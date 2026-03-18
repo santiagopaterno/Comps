@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Comps Builder — Santiago Paternó</title>
+  <meta name="description" content="Automated comparable company analysis tool. Pull live financials, compute multiples, and generate valuation ranges in seconds." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    html{background:#0a0c0e}
+    body{background:#0a0c0e;color:#e8eaed;font-family:'DM Sans','Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased;line-height:1.5}
+    #root{max-width:1060px;margin:0 auto;padding:28px 24px 60px}
+    input[type="range"]{-webkit-appearance:none;width:100%;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;outline:none;cursor:pointer}
+    input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#56d4a5;border:2px solid #0a0c0e;cursor:pointer}
+    ::selection{background:rgba(86,212,165,0.3)}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+    .fade-up{animation:fadeUp 0.5s ease-out both}
+    @keyframes pulse{0%,100%{box-shadow:0 0 6px rgba(86,212,165,0.4)}50%{box-shadow:0 0 14px rgba(86,212,165,0.7)}}
+    .pulse{animation:pulse 2s ease-in-out infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,0.1);border-top-color:#56d4a5;border-radius:50%;animation:spin 0.7s linear infinite;display:inline-block}
+    input[type="text"],input[type="password"]{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#e8eaed;padding:10px 14px;font-size:14px;font-family:'DM Sans',sans-serif;outline:none;transition:border-color 0.2s}
+    input[type="text"]:focus,input[type="password"]:focus{border-color:rgba(86,212,165,0.5)}
+    input[type="text"]::placeholder,input[type="password"]::placeholder{color:#444}
+    button{font-family:'DM Sans',sans-serif;cursor:pointer;border:none;outline:none;transition:all 0.2s}
+    button:active{transform:scale(0.97)}
+    table{border-spacing:0;width:100%}
+    ::-webkit-scrollbar{height:6px;width:6px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.2/babel.min.js"></script>
+
+  <script type="text/babel">
+    const {useState, useMemo, useCallback, useRef} = React;
+
+    // ─── DEMO DATA (real-ish figures for showcase) ───────────────────
+    const DEMO_DATA = {
+      MSFT: {name:"Microsoft Corp",ticker:"MSFT",price:415.30,mktCap:3087000,totalDebt:59000,cash:75500,revenue:245122,ebitda:123456,netIncome:88136,sector:"Technology",period:"FY2024"},
+      AAPL: {name:"Apple Inc",ticker:"AAPL",price:228.50,mktCap:3450000,totalDebt:111000,cash:65000,revenue:391035,ebitda:134000,netIncome:100913,sector:"Technology",period:"FY2024"},
+      GOOGL: {name:"Alphabet Inc",ticker:"GOOGL",price:175.60,mktCap:2170000,totalDebt:29000,cash:111000,revenue:350018,ebitda:115000,netIncome:100681,sector:"Technology",period:"FY2024"},
+      AMZN: {name:"Amazon.com Inc",ticker:"AMZN",price:205.70,mktCap:2170000,totalDebt:165000,cash:78700,revenue:638000,ebitda:115000,netIncome:59248,sector:"Technology",period:"FY2024"},
+      META: {name:"Meta Platforms Inc",ticker:"META",price:595.40,mktCap:1510000,totalDebt:37000,cash:58000,revenue:164710,ebitda:72600,netIncome:62360,sector:"Technology",period:"FY2024"},
+      CRM:  {name:"Salesforce Inc",ticker:"CRM",price:272.30,mktCap:264000,totalDebt:12500,cash:14200,revenue:37900,ebitda:13100,netIncome:8500,sector:"Technology",period:"FY2024"},
+      ORCL: {name:"Oracle Corp",ticker:"ORCL",price:168.90,mktCap:467000,totalDebt:88600,cash:11300,revenue:56100,ebitda:25800,netIncome:13000,sector:"Technology",period:"FY2024"},
+    };
+
+    // ─── FMP API FETCHER ─────────────────────────────────────────────
+    const FMP_BASE = "https://financialmodelingprep.com/api/v3";
+
+    async function fetchCompanyData(ticker, apiKey) {
+      const headers = {"Content-Type":"application/json"};
+      const [profileRes, isRes, bsRes] = await Promise.all([
+        fetch(`${FMP_BASE}/profile/${ticker}?apikey=${apiKey}`),
+        fetch(`${FMP_BASE}/income-statement/${ticker}?limit=1&apikey=${apiKey}`),
+        fetch(`${FMP_BASE}/balance-sheet-statement/${ticker}?limit=1&apikey=${apiKey}`),
+      ]);
+      const profile = await profileRes.json();
+      const income = await isRes.json();
+      const balance = await bsRes.json();
+
+      if (!profile?.[0]) throw new Error(`No data found for ${ticker}`);
+      if (profile?.[0]?.["Error Message"] || profile?.["Error Message"]) throw new Error(`API error — check your API key`);
+
+      const p = profile[0];
+      const is = income[0] || {};
+      const bs = balance[0] || {};
+
+      return {
+        name: p.companyName || ticker,
+        ticker: ticker.toUpperCase(),
+        price: p.price || 0,
+        mktCap: Math.round((p.mktCap || 0) / 1e6),
+        totalDebt: Math.round((bs.totalDebt || 0) / 1e6),
+        cash: Math.round((bs.cashAndCashEquivalents || bs.cashAndShortTermInvestments || 0) / 1e6),
+        revenue: Math.round((is.revenue || 0) / 1e6),
+        ebitda: Math.round((is.ebitda || 0) / 1e6),
+        netIncome: Math.round((is.netIncome || 0) / 1e6),
+        sector: p.sector || "—",
+        period: is.calendarYear ? `FY${is.calendarYear}` : "LTM",
+      };
+    }
+
+    // ─── HELPERS ─────────────────────────────────────────────────────
+    const fmt = (n,d=0) => n==null||isNaN(n) ? "—" : n.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
+    const fmtM = (n) => {
+      if (n==null||isNaN(n)) return "—";
+      if (Math.abs(n)>=1e6) return `$${(n/1e6).toFixed(1)}T`;
+      if (Math.abs(n)>=1e3) return `$${(n/1e3).toFixed(0)}B`;
+      return `$${fmt(n)}M`;
+    };
+    const pct = (n,d=1) => n==null||isNaN(n) ? "—" : (n*100).toFixed(d)+"%";
+
+    function calcEV(c) { return c.mktCap + c.totalDebt - c.cash; }
+    function calcMultiples(c) {
+      const ev = calcEV(c);
+      return {
+        ...c, ev,
+        evEbitda: c.ebitda > 0 ? ev / c.ebitda : null,
+        evRev: c.revenue > 0 ? ev / c.revenue : null,
+        pe: c.netIncome > 0 ? c.mktCap / c.netIncome : null,
+        ebitdaMargin: c.revenue > 0 ? c.ebitda / c.revenue : null,
+        netMargin: c.revenue > 0 ? c.netIncome / c.revenue : null,
+      };
+    }
+
+    function calcStats(peers) {
+      const sorted = arr => [...arr].filter(x=>x!=null).sort((a,b)=>a-b);
+      const median = arr => { const s=sorted(arr); if(!s.length) return null; const m=Math.floor(s.length/2); return s.length%2 ? s[m] : (s[m-1]+s[m])/2; };
+      const mean = arr => { const s=arr.filter(x=>x!=null); return s.length ? s.reduce((a,b)=>a+b,0)/s.length : null; };
+      const p25 = arr => { const s=sorted(arr); if(s.length<3) return s[0]||null; return s[Math.floor(s.length*0.25)]; };
+      const p75 = arr => { const s=sorted(arr); if(s.length<3) return s[s.length-1]||null; return s[Math.floor(s.length*0.75)]; };
+
+      const evEbitdas = peers.map(p=>p.evEbitda);
+      const evRevs = peers.map(p=>p.evRev);
+      const pes = peers.map(p=>p.pe);
+
+      return {
+        evEbitda: {mean:mean(evEbitdas), med:median(evEbitdas), p25:p25(evEbitdas), p75:p75(evEbitdas)},
+        evRev: {mean:mean(evRevs), med:median(evRevs), p25:p25(evRevs), p75:p75(evRevs)},
+        pe: {mean:mean(pes), med:median(pes), p25:p25(pes), p75:p75(pes)},
+      };
+    }
+
+    // ─── COMPONENTS ──────────────────────────────────────────────────
+
+    function Badge({children, color}) {
+      return <span style={{fontSize:9,color:color||"#56d4a5",background:`${color||"#56d4a5"}15`,padding:"3px 10px",borderRadius:4,letterSpacing:1.2,textTransform:"uppercase",fontWeight:600}}>{children}</span>;
+    }
+
+    function Section({title,tag,accent,children,style:s}) {
+      return (
+        <div className="fade-up" style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"22px 26px",marginBottom:18,...s}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
+            <div style={{fontSize:15,fontWeight:700,color:"#e8eaed",letterSpacing:0.3}}>{title}</div>
+            {tag && <Badge color={accent}>{tag}</Badge>}
+          </div>
+          {children}
+        </div>
+      );
+    }
+
+    function KPI({label,value,sub,accent}) {
+      return (
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:8,padding:"14px 18px",flex:1,minWidth:145}}>
+          <div style={{fontSize:10,color:"#8a8f98",letterSpacing:1.2,textTransform:"uppercase",marginBottom:6}}>{label}</div>
+          <div style={{fontSize:20,fontWeight:700,color:accent||"#e8eaed",fontFamily:"'JetBrains Mono', monospace"}}>{value}</div>
+          {sub && <div style={{fontSize:11,color:"#555",marginTop:4}}>{sub}</div>}
+        </div>
+      );
+    }
+
+    // ─── COMPS TABLE ─────────────────────────────────────────────────
+    function CompsTable({target, peers, stats}) {
+      const thStyle = {padding:"10px 12px",textAlign:"right",color:"#6b7280",fontSize:10,letterSpacing:1,textTransform:"uppercase",borderBottom:"1px solid rgba(255,255,255,0.1)",whiteSpace:"nowrap"};
+      const tdNum = {padding:"10px 12px",textAlign:"right",color:"#bcc0c6",fontFamily:"'JetBrains Mono', monospace",fontSize:12};
+      const tdMult = (color) => ({...tdNum, color, fontWeight:600});
+
+      const renderRow = (c, isTarget, isStat, statLabel) => (
+        <tr key={c?.ticker||statLabel} style={{
+          borderBottom: isTarget ? "2px solid rgba(86,212,165,0.3)" : isStat ? "none" : "1px solid rgba(255,255,255,0.04)",
+          background: isTarget ? "rgba(86,212,165,0.04)" : isStat ? "rgba(255,255,255,0.02)" : "transparent",
+        }}>
+          <td style={{padding:"10px 12px",color:isTarget?"#56d4a5":isStat?"#8a8f98":"#e8eaed",fontWeight:isTarget||isStat?700:500,fontSize:isStat?11:12,whiteSpace:"nowrap",position:"sticky",left:0,background:isTarget?"rgba(10,12,14,0.95)":isStat?"rgba(10,12,14,0.95)":"rgba(10,12,14,0.95)",zIndex:1}}>
+            {isStat ? statLabel : <>{c.ticker} <span style={{color:"#555",fontWeight:400,fontSize:11}}>{c.name?.split(' ').slice(0,2).join(' ')}</span></>}
+          </td>
+          <td style={tdNum}>{fmtM(c.mktCap)}</td>
+          <td style={tdNum}>{fmtM(c.ev)}</td>
+          <td style={tdNum}>{fmtM(c.revenue)}</td>
+          <td style={tdNum}>{fmtM(c.ebitda)}</td>
+          <td style={tdNum}>{c.ebitdaMargin!=null?pct(c.ebitdaMargin):"—"}</td>
+          <td style={tdMult("#4fc3f7")}>{c.evEbitda!=null?c.evEbitda.toFixed(1)+"x":"—"}</td>
+          <td style={tdMult("#81c784")}>{c.evRev!=null?c.evRev.toFixed(2)+"x":"—"}</td>
+          <td style={tdMult("#ffb74d")}>{c.pe!=null?c.pe.toFixed(1)+"x":"—"}</td>
+        </tr>
+      );
+
+      const statRow = (label, evEb, evR, peV) => ({
+        mktCap:null,ev:null,revenue:null,ebitda:null,ebitdaMargin:null,
+        evEbitda:evEb,evRev:evR,pe:peV
+      });
+
+      return (
+        <div style={{overflowX:"auto",borderRadius:8,border:"1px solid rgba(255,255,255,0.06)"}}>
+          <table style={{borderCollapse:"collapse",minWidth:800}}>
+            <thead><tr>
+              <th style={{...thStyle,textAlign:"left",position:"sticky",left:0,background:"rgba(10,12,14,0.95)",zIndex:2}}>Company</th>
+              <th style={thStyle}>Mkt Cap</th>
+              <th style={thStyle}>EV</th>
+              <th style={thStyle}>Revenue</th>
+              <th style={thStyle}>EBITDA</th>
+              <th style={thStyle}>Margin</th>
+              <th style={{...thStyle,color:"#4fc3f7"}}>EV/EBITDA</th>
+              <th style={{...thStyle,color:"#81c784"}}>EV/Rev</th>
+              <th style={{...thStyle,color:"#ffb74d"}}>P/E</th>
+            </tr></thead>
+            <tbody>
+              {renderRow(target, true)}
+              <tr><td colSpan={9} style={{padding:0,height:8}}></td></tr>
+              {peers.map(p => renderRow(p, false))}
+              <tr><td colSpan={9} style={{padding:0,height:2,borderTop:"2px solid rgba(255,255,255,0.08)"}}></td></tr>
+              {renderRow(statRow("Mean", stats.evEbitda.mean, stats.evRev.mean, stats.pe.mean), false, true, "Mean")}
+              {renderRow(statRow("Median", stats.evEbitda.med, stats.evRev.med, stats.pe.med), false, true, "Median")}
+              {renderRow(statRow("25th %ile", stats.evEbitda.p25, stats.evRev.p25, stats.pe.p25), false, true, "25th Pctl")}
+              {renderRow(statRow("75th %ile", stats.evEbitda.p75, stats.evRev.p75, stats.pe.p75), false, true, "75th Pctl")}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    // ─── IMPLIED VALUATION ───────────────────────────────────────────
+    function ImpliedValuation({target, stats}) {
+      const ev = calcEV(target);
+      const netDebt = target.totalDebt - target.cash;
+      const methods = [
+        {label:"EV/EBITDA",color:"#4fc3f7",p25:stats.evEbitda.p25,med:stats.evEbitda.med,p75:stats.evEbitda.p75,base:target.ebitda,isEV:true},
+        {label:"EV/Revenue",color:"#81c784",p25:stats.evRev.p25,med:stats.evRev.med,p75:stats.evRev.p75,base:target.revenue,isEV:true},
+        {label:"P/E",color:"#ffb74d",p25:stats.pe.p25,med:stats.pe.med,p75:stats.pe.p75,base:target.netIncome,isEV:false},
+      ];
+
+      return (
+        <div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,fontFamily:"'JetBrains Mono', monospace"}}>
+              <thead><tr>
+                <th style={{padding:"10px 14px",textAlign:"left",color:"#6b7280",fontSize:10,letterSpacing:1,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>METHODOLOGY</th>
+                <th style={{padding:"10px 14px",textAlign:"right",color:"#6b7280",fontSize:10,letterSpacing:1,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>25TH PCTL</th>
+                <th style={{padding:"10px 14px",textAlign:"right",color:"#6b7280",fontSize:10,letterSpacing:1,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>MEDIAN</th>
+                <th style={{padding:"10px 14px",textAlign:"right",color:"#6b7280",fontSize:10,letterSpacing:1,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>75TH PCTL</th>
+              </tr></thead>
+              <tbody>
+                {methods.map((m,i) => {
+                  if (!m.base || !m.p25) return null;
+                  const v25 = m.isEV ? m.p25*m.base - netDebt : m.p25*m.base;
+                  const vMed = m.isEV ? m.med*m.base - netDebt : m.med*m.base;
+                  const v75 = m.isEV ? m.p75*m.base - netDebt : m.p75*m.base;
+                  return (
+                    <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+                      <td style={{padding:"10px 14px",color:m.color,fontWeight:600,fontSize:12}}>{m.label} → Equity Value</td>
+                      <td style={{padding:"10px 14px",textAlign:"right",color:"#bcc0c6"}}>{fmtM(v25)}</td>
+                      <td style={{padding:"10px 14px",textAlign:"right",color:"#e8eaed",fontWeight:700}}>{fmtM(vMed)}</td>
+                      <td style={{padding:"10px 14px",textAlign:"right",color:"#bcc0c6"}}>{fmtM(v75)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{marginTop:14,padding:"10px 14px",background:"rgba(255,255,255,0.02)",borderRadius:6,fontSize:11,color:"#555"}}>
+            <span style={{color:"#8a8f98"}}>Reference:</span> {target.ticker} current Market Cap = {fmtM(target.mktCap)} · Net Debt = {fmtM(target.totalDebt - target.cash)}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── FOOTBALL FIELD ──────────────────────────────────────────────
+    function FootballField({target, stats}) {
+      const netDebt = target.totalDebt - target.cash;
+      const ranges = [
+        {label:"EV/EBITDA",color:"#4fc3f7",low:stats.evEbitda.p25*target.ebitda-netDebt,med:stats.evEbitda.med*target.ebitda-netDebt,high:stats.evEbitda.p75*target.ebitda-netDebt},
+        {label:"EV/Revenue",color:"#81c784",low:stats.evRev.p25*target.revenue-netDebt,med:stats.evRev.med*target.revenue-netDebt,high:stats.evRev.p75*target.revenue-netDebt},
+        {label:"P/E",color:"#ffb74d",low:stats.pe.p25*target.netIncome,med:stats.pe.med*target.netIncome,high:stats.pe.p75*target.netIncome},
+      ].filter(r=>r.low&&r.high&&!isNaN(r.low)&&!isNaN(r.high));
+
+      if (!ranges.length) return <div style={{color:"#555",fontSize:12}}>Insufficient data for football field.</div>;
+
+      const allVals = ranges.flatMap(r=>[r.low,r.high]).concat([target.mktCap]);
+      const minV = Math.min(...allVals)*0.85;
+      const maxV = Math.max(...allVals)*1.15;
+      const scale = v => Math.max(0,Math.min(100,((v-minV)/(maxV-minV))*100));
+
+      return (
+        <div>
+          {ranges.map((r,i) => (
+            <div key={i} style={{marginBottom:18,display:"flex",alignItems:"center",gap:14}}>
+              <div style={{width:100,fontSize:11,color:r.color,textAlign:"right",fontWeight:600,letterSpacing:0.5,flexShrink:0}}>{r.label}</div>
+              <div style={{flex:1,position:"relative",height:34,background:"rgba(255,255,255,0.025)",borderRadius:6}}>
+                <div style={{position:"absolute",left:`${scale(r.low)}%`,width:`${Math.max(1,scale(r.high)-scale(r.low))}%`,top:5,height:24,background:`${r.color}20`,border:`1px solid ${r.color}44`,borderRadius:4}} />
+                <div style={{position:"absolute",left:`${scale(r.med)}%`,top:3,width:2,height:28,background:r.color,borderRadius:1}} />
+                {/* Current mkt cap marker */}
+                <div style={{position:"absolute",left:`${scale(target.mktCap)}%`,top:0,width:1,height:34,borderLeft:"2px dashed rgba(86,212,165,0.5)"}} />
+              </div>
+              <div style={{width:130,fontSize:10,color:"#555",fontFamily:"'JetBrains Mono', monospace",flexShrink:0,whiteSpace:"nowrap"}}>
+                {fmtM(r.low)} – {fmtM(r.high)}
+              </div>
+            </div>
+          ))}
+          <div style={{display:"flex",alignItems:"center",gap:14,marginTop:6}}>
+            <div style={{width:100}} />
+            <div style={{flex:1,display:"flex",alignItems:"center",gap:8,fontSize:10,color:"#56d4a5"}}>
+              <div style={{width:16,borderTop:"2px dashed rgba(86,212,165,0.5)"}} />
+              Current Mkt Cap: {fmtM(target.mktCap)}
+            </div>
+            <div style={{width:130}} />
+          </div>
+        </div>
+      );
+    }
+
+    // ─── CSV EXPORT ──────────────────────────────────────────────────
+    function exportCSV(target, peers, stats) {
+      const header = ["Company","Ticker","Mkt Cap ($M)","EV ($M)","Revenue ($M)","EBITDA ($M)","Net Income ($M)","EV/EBITDA","EV/Revenue","P/E"];
+      const row = c => [c.name,c.ticker,c.mktCap,c.ev,c.revenue,c.ebitda,c.netIncome,c.evEbitda?.toFixed(2)||"",c.evRev?.toFixed(2)||"",c.pe?.toFixed(2)||""];
+      const rows = [header, row(target), [], ...peers.map(row), [],
+        ["Mean","","","","","","",stats.evEbitda.mean?.toFixed(2)||"",stats.evRev.mean?.toFixed(2)||"",stats.pe.mean?.toFixed(2)||""],
+        ["Median","","","","","","",stats.evEbitda.med?.toFixed(2)||"",stats.evRev.med?.toFixed(2)||"",stats.pe.med?.toFixed(2)||""],
+      ];
+      const csv = rows.map(r=>r.join(",")).join("\n");
+      const blob = new Blob([csv],{type:"text/csv"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `comps_${target.ticker}_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ─── MAIN APP ────────────────────────────────────────────────────
+    function App() {
+      const [mode, setMode] = useState("demo"); // "demo" or "live"
+      const [apiKey, setApiKey] = useState("");
+      const [targetTicker, setTargetTicker] = useState("MSFT");
+      const [peerInput, setPeerInput] = useState("");
+      const [peerTickers, setPeerTickers] = useState(["AAPL","GOOGL","AMZN","META"]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+      const [results, setResults] = useState(null);
+      const inputRef = useRef(null);
+
+      // Run demo on mount
+      React.useEffect(() => { runDemo(); }, []);
+
+      function runDemo() {
+        const target = calcMultiples(DEMO_DATA[targetTicker] || DEMO_DATA.MSFT);
+        const demoPeers = peerTickers
+          .filter(t => DEMO_DATA[t.toUpperCase()])
+          .map(t => calcMultiples(DEMO_DATA[t.toUpperCase()]));
+        if (!demoPeers.length) { setError("No matching demo tickers. Try: AAPL, GOOGL, AMZN, META, CRM, ORCL"); return; }
+        const stats = calcStats(demoPeers);
+        setResults({target, peers:demoPeers, stats});
+        setError(null);
+      }
+
+      async function runLive() {
+        if (!apiKey.trim()) { setError("Enter your FMP API key first."); return; }
+        if (!targetTicker.trim()) { setError("Enter a target ticker."); return; }
+        if (peerTickers.length < 2) { setError("Add at least 2 peer companies."); return; }
+        setLoading(true); setError(null);
+        try {
+          const targetData = calcMultiples(await fetchCompanyData(targetTicker.trim(), apiKey.trim()));
+          const peerPromises = peerTickers.map(t => fetchCompanyData(t.trim(), apiKey.trim()).catch(e => null));
+          const peerResults = (await Promise.all(peerPromises)).filter(Boolean).map(calcMultiples);
+          if (peerResults.length < 2) throw new Error("Could not fetch enough peers. Check tickers and API key.");
+          const stats = calcStats(peerResults);
+          setResults({target:targetData, peers:peerResults, stats});
+        } catch(e) {
+          setError(e.message);
+        }
+        setLoading(false);
+      }
+
+      function addPeer() {
+        const t = peerInput.trim().toUpperCase();
+        if (t && !peerTickers.includes(t) && t !== targetTicker.toUpperCase()) {
+          setPeerTickers([...peerTickers, t]);
+          setPeerInput("");
+          setResults(null);
+        }
+      }
+
+      function removePeer(t) {
+        setPeerTickers(peerTickers.filter(p=>p!==t));
+        setResults(null);
+      }
+
+      function handleRun() {
+        if (mode === "demo") runDemo();
+        else runLive();
+      }
+
+      return (
+        <div>
+          {/* Header */}
+          <div style={{marginBottom:32}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+              <div className="pulse" style={{width:8,height:8,borderRadius:"50%",background:"#56d4a5"}} />
+              <div style={{fontSize:10,color:"#56d4a5",letterSpacing:2.5,textTransform:"uppercase",fontWeight:600}}>Comps Engine</div>
+            </div>
+            <h1 style={{fontSize:30,fontWeight:800,letterSpacing:-0.5,background:"linear-gradient(135deg, #e8eaed 30%, #6b7280)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>
+              Live Comps Builder
+            </h1>
+            <p style={{fontSize:13,color:"#555",marginTop:6,maxWidth:600}}>
+              Enter a target company and peer set. The tool pulls live financials, calculates EV and trading multiples, and generates an implied valuation range — the same analysis junior IB analysts build manually.
+            </p>
+          </div>
+
+          {/* Mode Toggle */}
+          <div style={{display:"flex",gap:2,marginBottom:20,background:"rgba(255,255,255,0.03)",borderRadius:8,padding:3,maxWidth:300}}>
+            {[{id:"demo",label:"Demo Mode"},{id:"live",label:"Live API"}].map(m => (
+              <button key={m.id} onClick={()=>{setMode(m.id);setResults(null);setError(null)}} style={{
+                flex:1,padding:"9px 16px",fontSize:12,fontWeight:600,borderRadius:5,
+                color:mode===m.id?"#0a0c0e":"#6b7280",
+                background:mode===m.id?"#56d4a5":"transparent",
+                letterSpacing:0.5,
+              }}>{m.label}</button>
+            ))}
+          </div>
+
+          {/* Setup Panel */}
+          <Section title="Setup" tag={mode==="demo"?"Sample Data":"FMP API"} accent={mode==="demo"?"#ffb74d":"#56d4a5"}>
+            {mode==="live" && (
+              <div style={{marginBottom:18}}>
+                <div style={{fontSize:11,color:"#8a8f98",marginBottom:6,letterSpacing:0.5}}>FMP API KEY <span style={{color:"#555"}}>— free at financialmodelingprep.com</span></div>
+                <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="Paste your API key here" style={{width:"100%",maxWidth:420}} />
+              </div>
+            )}
+
+            <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:20,alignItems:"start"}}>
+              {/* Target */}
+              <div>
+                <div style={{fontSize:11,color:"#8a8f98",marginBottom:6,letterSpacing:0.5}}>TARGET COMPANY</div>
+                <input type="text" value={targetTicker} onChange={e=>{setTargetTicker(e.target.value.toUpperCase());setResults(null)}} placeholder="e.g. MSFT" style={{width:"100%",textTransform:"uppercase",fontFamily:"'JetBrains Mono',monospace",fontSize:15,fontWeight:600,letterSpacing:1}} />
+                {mode==="demo" && <div style={{fontSize:10,color:"#444",marginTop:4}}>Available: MSFT, AAPL, GOOGL, AMZN, META, CRM, ORCL</div>}
+              </div>
+
+              {/* Peers */}
+              <div>
+                <div style={{fontSize:11,color:"#8a8f98",marginBottom:6,letterSpacing:0.5}}>PEER COMPANIES</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+                  {peerTickers.map(t => (
+                    <div key={t} style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:5,padding:"5px 10px"}}>
+                      <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,fontWeight:600,letterSpacing:0.5,color:"#e8eaed"}}>{t}</span>
+                      <button onClick={()=>removePeer(t)} style={{background:"none",color:"#555",fontSize:14,padding:0,lineHeight:1}}>&times;</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <input ref={inputRef} type="text" value={peerInput} onChange={e=>setPeerInput(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter")addPeer()}} placeholder="Add ticker..." style={{width:140,textTransform:"uppercase",fontFamily:"'JetBrains Mono',monospace",fontSize:13}} />
+                  <button onClick={addPeer} style={{background:"rgba(255,255,255,0.06)",color:"#8a8f98",padding:"8px 16px",borderRadius:6,fontSize:12,fontWeight:600}}>+ Add</button>
+                </div>
+              </div>
+            </div>
+
+            {/* Run Button */}
+            <div style={{marginTop:22,display:"flex",alignItems:"center",gap:16}}>
+              <button onClick={handleRun} disabled={loading} style={{
+                background:loading?"rgba(86,212,165,0.3)":"#56d4a5",
+                color:"#0a0c0e",padding:"11px 32px",borderRadius:7,fontSize:14,fontWeight:700,letterSpacing:0.3,
+                display:"flex",alignItems:"center",gap:10,
+              }}>
+                {loading ? <><span className="spinner" style={{borderTopColor:"#0a0c0e"}}></span> Fetching...</> : mode==="demo" ? "Build Comps (Demo)" : "Build Comps (Live)"}
+              </button>
+              {results && (
+                <button onClick={()=>exportCSV(results.target,results.peers,results.stats)} style={{background:"rgba(255,255,255,0.05)",color:"#8a8f98",padding:"11px 20px",borderRadius:7,fontSize:12,fontWeight:600,letterSpacing:0.5}}>
+                  Export CSV
+                </button>
+              )}
+            </div>
+
+            {error && <div style={{marginTop:14,padding:"10px 14px",background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:6,color:"#f09090",fontSize:12}}>{error}</div>}
+          </Section>
+
+          {/* Results */}
+          {results && (
+            <>
+              {/* KPIs */}
+              <div className="fade-up" style={{display:"flex",gap:12,marginBottom:18,flexWrap:"wrap"}}>
+                <KPI label="Target" value={results.target.ticker} sub={results.target.name} accent="#56d4a5" />
+                <KPI label="Market Cap" value={fmtM(results.target.mktCap)} sub={`$${fmt(results.target.price,2)}/share`} accent="#4fc3f7" />
+                <KPI label="Enterprise Value" value={fmtM(results.target.ev)} sub={`Net Debt: ${fmtM(results.target.totalDebt-results.target.cash)}`} />
+                <KPI label="EBITDA Margin" value={results.target.ebitdaMargin!=null?pct(results.target.ebitdaMargin):"—"} sub={`EBITDA: ${fmtM(results.target.ebitda)}`} accent="#ffb74d" />
+                <KPI label="Peer Count" value={results.peers.length} sub={results.target.period||"LTM"} accent="#ce93d8" />
+              </div>
+
+              {/* Comps Table */}
+              <Section title="Comparable Company Analysis" tag={`${results.peers.length}-Company Peer Set`} accent="#4fc3f7">
+                <CompsTable target={results.target} peers={results.peers} stats={results.stats} />
+              </Section>
+
+              {/* Implied Valuation */}
+              <Section title="Implied Valuation" tag="Equity Value" accent="#56d4a5">
+                <ImpliedValuation target={results.target} stats={results.stats} />
+              </Section>
+
+              {/* Football Field */}
+              <Section title="Football Field" tag="Valuation Range" accent="#ce93d8">
+                <FootballField target={results.target} stats={results.stats} />
+              </Section>
+            </>
+          )}
+
+          {/* Footer */}
+          <div style={{marginTop:36,paddingTop:20,borderTop:"1px solid rgba(255,255,255,0.04)",textAlign:"center"}}>
+            <div style={{fontSize:10,color:"#282828",letterSpacing:1.5,textTransform:"uppercase"}}>
+              Built by Santiago Paternó · Buenos Aires · {new Date().getFullYear()}
+            </div>
+            <div style={{fontSize:10,color:"#1a1a1a",marginTop:4}}>
+              Live Comps Builder · Financial data via Financial Modeling Prep API
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
