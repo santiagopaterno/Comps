@@ -58,7 +58,7 @@
     async function safeJson(res) {
       const text = await res.text();
       try { return JSON.parse(text); }
-      catch { throw new Error(text.slice(0, 120)); }
+      catch { return null; }
     }
 
     async function fetchCompanyData(ticker, apiKey) {
@@ -68,26 +68,31 @@
         fetch(`${FMP_BASE}/balance-sheet-statement?symbol=${ticker}&limit=1&apikey=${apiKey}`),
       ]);
 
-      if (!profileRes.ok) throw new Error(`API returned ${profileRes.status} for ${ticker}. Check your API key.`);
+      // Check profile first — if this fails, the ticker is unusable
+      if (profileRes.status === 402) throw new Error(`${ticker}: profile data requires a paid FMP plan.`);
+      if (profileRes.status === 403) throw new Error(`${ticker}: access denied. Check your API key.`);
+      if (profileRes.status === 429) throw new Error(`${ticker}: API rate limit reached. Wait and retry.`);
+      if (!profileRes.ok) throw new Error(`${ticker}: API returned ${profileRes.status}.`);
 
       const profile = await safeJson(profileRes);
-      const income = await safeJson(isRes).catch(() => []);
-      const balance = await safeJson(bsRes).catch(() => []);
-
-      // Debug: log raw responses to console so you can inspect
-      console.log(`[${ticker}] profile:`, profile);
-      console.log(`[${ticker}] income:`, income);
-      console.log(`[${ticker}] balance:`, balance);
-
-      // Handle error messages from FMP
       const errMsg = profile?.["Error Message"] || (Array.isArray(profile) && profile[0]?.["Error Message"]);
-      if (errMsg) throw new Error(`FMP error for ${ticker}: ${errMsg}`);
+      if (errMsg) throw new Error(`${ticker}: ${errMsg}`);
 
       const p = Array.isArray(profile) ? profile[0] : profile;
-      if (!p || (!p.companyName && !p.symbol)) throw new Error(`No data found for ${ticker}. Check the ticker symbol.`);
+      if (!p || (!p.companyName && !p.symbol)) throw new Error(`${ticker}: no profile data found. Check the ticker.`);
 
-      const is = Array.isArray(income) ? income[0] || {} : income || {};
-      const bs = Array.isArray(balance) ? balance[0] || {} : balance || {};
+      // Track which statements are paywalled
+      const warnings = [];
+
+      let is = {};
+      if (isRes.status === 402) { warnings.push("income statement (paid plan)"); }
+      else if (isRes.ok) { const d = await safeJson(isRes); is = (Array.isArray(d) ? d[0] : d) || {}; }
+
+      let bs = {};
+      if (bsRes.status === 402) { warnings.push("balance sheet (paid plan)"); }
+      else if (bsRes.ok) { const d = await safeJson(bsRes); bs = (Array.isArray(d) ? d[0] : d) || {}; }
+
+      const hasFinancials = (is.revenue || is.ebitda || is.netIncome);
 
       return {
         name: p.companyName || p.name || ticker,
@@ -101,6 +106,8 @@
         netIncome: Math.round((is.netIncome || 0) / 1e6),
         sector: p.sector || "—",
         period: is.calendarYear ? `FY${is.calendarYear}` : "LTM",
+        _warnings: warnings,
+        _hasFinancials: !!hasFinancials,
       };
     }
 
@@ -372,12 +379,35 @@
         try {
           const targetData = calcMultiples(await fetchCompanyData(targetTicker.trim(), apiKey.trim()));
           const failedPeers = [];
-          const peerPromises = peerTickers.map(t => fetchCompanyData(t.trim(), apiKey.trim()).catch(e => { failedPeers.push(t); console.warn(`[${t}] failed:`, e.message); return null; }));
-          const peerResults = (await Promise.all(peerPromises)).filter(Boolean).map(calcMultiples);
-          if (peerResults.length < 2) throw new Error("Could not fetch enough peers. Check tickers and API key. Failed: " + failedPeers.join(", "));
-          const stats = calcStats(peerResults);
-          setResults({target:targetData, peers:peerResults, stats});
-          if (failedPeers.length) setError(`Warning: Could not load ${failedPeers.join(", ")} — data may require a paid FMP plan. Analysis built with ${peerResults.length} peers.`);
+          const peerPromises = peerTickers.map(t => fetchCompanyData(t.trim(), apiKey.trim()).catch(e => { failedPeers.push({ticker:t, reason:e.message}); return null; }));
+          const allPeers = (await Promise.all(peerPromises)).filter(Boolean);
+          const peerResults = allPeers.map(calcMultiples);
+
+          // Build warning messages
+          const msgs = [];
+
+          // Target warnings
+          if (targetData._warnings?.length) msgs.push(`${targetData.ticker}: missing ${targetData._warnings.join(", ")}`);
+          if (!targetData._hasFinancials) msgs.push(`${targetData.ticker}: no financial statements available — multiples cannot be calculated. This ticker may require a paid FMP plan.`);
+
+          // Failed peers
+          failedPeers.forEach(f => msgs.push(`${f.ticker}: ${f.reason}`));
+
+          // Peers with missing financials
+          const paywalled = peerResults.filter(p => !p._hasFinancials);
+          paywalled.forEach(p => {
+            msgs.push(`${p.ticker}: market cap loaded but financial statements unavailable (paid plan required). Excluded from multiples.`);
+          });
+
+          // Filter to only peers with actual financial data for statistics
+          const validPeers = peerResults.filter(p => p._hasFinancials);
+
+          if (validPeers.length < 2) throw new Error("Not enough peers with financial data (need at least 2). " + (msgs.length ? msgs.join(" | ") : "Check tickers or try different peers."));
+
+          const stats = calcStats(validPeers);
+          setResults({target:targetData, peers:validPeers, stats});
+
+          if (msgs.length) setError("Warning: " + msgs.join(" · "));
         } catch(e) {
           setError(e.message);
         }
@@ -482,7 +512,10 @@
               )}
             </div>
 
-            {error && <div style={{marginTop:14,padding:"10px 14px",background:error.startsWith("Warning")?"rgba(255,183,77,0.08)":"rgba(239,68,68,0.08)",border:error.startsWith("Warning")?"1px solid rgba(255,183,77,0.2)":"1px solid rgba(239,68,68,0.2)",borderRadius:6,color:error.startsWith("Warning")?"#ffb74d":"#f09090",fontSize:12}}>{error}</div>}
+            {error && <div style={{marginTop:14,padding:"12px 16px",background:error.startsWith("Warning")?"rgba(255,183,77,0.06)":"rgba(239,68,68,0.08)",border:error.startsWith("Warning")?"1px solid rgba(255,183,77,0.15)":"1px solid rgba(239,68,68,0.2)",borderRadius:8,color:error.startsWith("Warning")?"#ffb74d":"#f09090",fontSize:12,lineHeight:1.7}}>
+              <div style={{fontWeight:700,marginBottom:error.includes("·")?6:0,fontSize:11,letterSpacing:0.5,textTransform:"uppercase"}}>{error.startsWith("Warning")?"⚠ Data Warnings":"Error"}</div>
+              {error.replace("Warning: ","").split(" · ").map((msg,i) => <div key={i} style={{paddingLeft:4}}>• {msg}</div>)}
+            </div>}
           </Section>
 
           {/* Results */}
