@@ -84,12 +84,12 @@
       const bs = Array.isArray(balance) ? balance[0] || {} : balance || {};
 
       return {
-        name: p.companyName || ticker,
+        name: p.companyName || p.name || ticker,
         ticker: ticker.toUpperCase(),
         price: p.price || 0,
-        mktCap: Math.round((p.mktCap || 0) / 1e6),
-        totalDebt: Math.round((bs.totalDebt || 0) / 1e6),
-        cash: Math.round((bs.cashAndCashEquivalents || bs.cashAndShortTermInvestments || 0) / 1e6),
+        mktCap: Math.round((p.marketCap || p.mktCap || 0) / 1e6),
+        totalDebt: Math.round((bs.totalDebt || bs.longTermDebt || 0) / 1e6),
+        cash: Math.round((bs.cashAndCashEquivalents || bs.cashAndShortTermInvestments || bs.totalCash || 0) / 1e6),
         revenue: Math.round((is.revenue || 0) / 1e6),
         ebitda: Math.round((is.ebitda || 0) / 1e6),
         netIncome: Math.round((is.netIncome || 0) / 1e6),
