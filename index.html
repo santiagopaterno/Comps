@@ -43,13 +43,13 @@
 
     // ─── DEMO DATA (real-ish figures for showcase) ───────────────────
     const DEMO_DATA = {
-      MSFT: {name:"Microsoft Corp",ticker:"MSFT",price:415.30,mktCap:3087000,totalDebt:59000,cash:75500,bookValue:268000,revenue:245122,ebitda:123456,netIncome:88136,sector:"Technology",period:"FY2024"},
-      AAPL: {name:"Apple Inc",ticker:"AAPL",price:228.50,mktCap:3450000,totalDebt:111000,cash:65000,bookValue:57000,revenue:391035,ebitda:134000,netIncome:100913,sector:"Technology",period:"FY2024"},
-      GOOGL: {name:"Alphabet Inc",ticker:"GOOGL",price:175.60,mktCap:2170000,totalDebt:29000,cash:111000,bookValue:315000,revenue:350018,ebitda:115000,netIncome:100681,sector:"Technology",period:"FY2024"},
-      AMZN: {name:"Amazon.com Inc",ticker:"AMZN",price:205.70,mktCap:2170000,totalDebt:165000,cash:78700,bookValue:259000,revenue:638000,ebitda:115000,netIncome:59248,sector:"Technology",period:"FY2024"},
-      META: {name:"Meta Platforms Inc",ticker:"META",price:595.40,mktCap:1510000,totalDebt:37000,cash:58000,bookValue:165000,revenue:164710,ebitda:72600,netIncome:62360,sector:"Technology",period:"FY2024"},
-      CRM:  {name:"Salesforce Inc",ticker:"CRM",price:272.30,mktCap:264000,totalDebt:12500,cash:14200,bookValue:60000,revenue:37900,ebitda:13100,netIncome:8500,sector:"Technology",period:"FY2024"},
-      ORCL: {name:"Oracle Corp",ticker:"ORCL",price:168.90,mktCap:467000,totalDebt:88600,cash:11300,bookValue:15000,revenue:56100,ebitda:25800,netIncome:13000,sector:"Technology",period:"FY2024"},
+      MSFT: {name:"Microsoft Corp",ticker:"MSFT",price:415.30,mktCap:3087000,sharesOut:7433,totalDebt:59000,cash:75500,bookValue:268000,revenue:245122,ebitda:123456,netIncome:88136,sector:"Technology",period:"FY2024"},
+      AAPL: {name:"Apple Inc",ticker:"AAPL",price:228.50,mktCap:3450000,sharesOut:15098,totalDebt:111000,cash:65000,bookValue:57000,revenue:391035,ebitda:134000,netIncome:100913,sector:"Technology",period:"FY2024"},
+      GOOGL: {name:"Alphabet Inc",ticker:"GOOGL",price:175.60,mktCap:2170000,sharesOut:12358,totalDebt:29000,cash:111000,bookValue:315000,revenue:350018,ebitda:115000,netIncome:100681,sector:"Technology",period:"FY2024"},
+      AMZN: {name:"Amazon.com Inc",ticker:"AMZN",price:205.70,mktCap:2170000,sharesOut:10549,totalDebt:165000,cash:78700,bookValue:259000,revenue:638000,ebitda:115000,netIncome:59248,sector:"Technology",period:"FY2024"},
+      META: {name:"Meta Platforms Inc",ticker:"META",price:595.40,mktCap:1510000,sharesOut:2536,totalDebt:37000,cash:58000,bookValue:165000,revenue:164710,ebitda:72600,netIncome:62360,sector:"Technology",period:"FY2024"},
+      CRM:  {name:"Salesforce Inc",ticker:"CRM",price:272.30,mktCap:264000,sharesOut:970,totalDebt:12500,cash:14200,bookValue:60000,revenue:37900,ebitda:13100,netIncome:8500,sector:"Technology",period:"FY2024"},
+      ORCL: {name:"Oracle Corp",ticker:"ORCL",price:168.90,mktCap:467000,sharesOut:2765,totalDebt:88600,cash:11300,bookValue:15000,revenue:56100,ebitda:25800,netIncome:13000,sector:"Technology",period:"FY2024"},
     };
 
     // ─── FMP API FETCHER ─────────────────────────────────────────────
@@ -94,11 +94,16 @@
 
       const hasFinancials = (is.revenue || is.ebitda || is.netIncome);
 
+      const mktCapM = Math.round((p.marketCap || p.mktCap || 0) / 1e6);
+      const priceVal = p.price || 0;
+      const sharesOut = priceVal > 0 ? mktCapM / priceVal : 0; // in millions
+
       return {
         name: p.companyName || p.name || ticker,
         ticker: ticker.toUpperCase(),
-        price: p.price || 0,
-        mktCap: Math.round((p.marketCap || p.mktCap || 0) / 1e6),
+        price: priceVal,
+        mktCap: mktCapM,
+        sharesOut,
         totalDebt: Math.round((bs.totalDebt || bs.longTermDebt || 0) / 1e6),
         cash: Math.round((bs.cashAndCashEquivalents || bs.cashAndShortTermInvestments || bs.totalCash || 0) / 1e6),
         bookValue: Math.round((bs.totalStockholdersEquity || bs.totalEquity || 0) / 1e6),
@@ -252,6 +257,7 @@
     function ImpliedValuation({target, stats}) {
       const ev = calcEV(target);
       const netDebt = target.totalDebt - target.cash;
+      const shares = target.sharesOut; // in millions
       const methods = [
         {label:"EV/EBITDA",color:"#4fc3f7",p25:stats.evEbitda.p25,med:stats.evEbitda.med,p75:stats.evEbitda.p75,base:target.ebitda,isEV:true},
         {label:"EV/Revenue",color:"#81c784",p25:stats.evRev.p25,med:stats.evRev.med,p75:stats.evRev.p75,base:target.revenue,isEV:true},
@@ -259,37 +265,82 @@
         {label:"P/BV",color:"#e091d2",p25:stats.pbv.p25,med:stats.pbv.med,p75:stats.pbv.p75,base:target.bookValue,isEV:false},
       ];
 
+      const thSm = {padding:"10px 14px",textAlign:"right",color:"#6b7280",fontSize:10,letterSpacing:1,borderBottom:"1px solid rgba(255,255,255,0.08)"};
+      const fmtPrice = (eqVal) => (shares > 0 && eqVal) ? `$${(eqVal / shares).toFixed(2)}` : "—";
+
+      const computed = methods.map(m => {
+        if (!m.base || !m.p25) return null;
+        const v25 = m.isEV ? m.p25*m.base - netDebt : m.p25*m.base;
+        const vMed = m.isEV ? m.med*m.base - netDebt : m.med*m.base;
+        const v75 = m.isEV ? m.p75*m.base - netDebt : m.p75*m.base;
+        return {...m, v25, vMed, v75};
+      }).filter(Boolean);
+
+      if (!computed.length) return <div style={{color:"#555",fontSize:12}}>Insufficient data for implied valuation.</div>;
+
       return (
         <div>
+          {/* Equity Value table */}
           <div style={{overflowX:"auto"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,fontFamily:"'JetBrains Mono', monospace"}}>
               <thead><tr>
-                <th style={{padding:"10px 14px",textAlign:"left",color:"#6b7280",fontSize:10,letterSpacing:1,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>METHODOLOGY</th>
-                <th style={{padding:"10px 14px",textAlign:"right",color:"#6b7280",fontSize:10,letterSpacing:1,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>25TH PCTL</th>
-                <th style={{padding:"10px 14px",textAlign:"right",color:"#6b7280",fontSize:10,letterSpacing:1,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>MEDIAN</th>
-                <th style={{padding:"10px 14px",textAlign:"right",color:"#6b7280",fontSize:10,letterSpacing:1,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>75TH PCTL</th>
+                <th style={{...thSm,textAlign:"left"}}>METHODOLOGY</th>
+                <th style={thSm}>25TH PCTL</th>
+                <th style={thSm}>MEDIAN</th>
+                <th style={thSm}>75TH PCTL</th>
               </tr></thead>
               <tbody>
-                {methods.map((m,i) => {
-                  if (!m.base || !m.p25) return null;
-                  const v25 = m.isEV ? m.p25*m.base - netDebt : m.p25*m.base;
-                  const vMed = m.isEV ? m.med*m.base - netDebt : m.med*m.base;
-                  const v75 = m.isEV ? m.p75*m.base - netDebt : m.p75*m.base;
-                  return (
-                    <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
-                      <td style={{padding:"10px 14px",color:m.color,fontWeight:600,fontSize:12}}>{m.label} → Equity Value</td>
-                      <td style={{padding:"10px 14px",textAlign:"right",color:"#bcc0c6"}}>{fmtM(v25)}</td>
-                      <td style={{padding:"10px 14px",textAlign:"right",color:"#e8eaed",fontWeight:700}}>{fmtM(vMed)}</td>
-                      <td style={{padding:"10px 14px",textAlign:"right",color:"#bcc0c6"}}>{fmtM(v75)}</td>
-                    </tr>
-                  );
-                })}
+                {computed.map((m,i) => (
+                  <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+                    <td style={{padding:"10px 14px",color:m.color,fontWeight:600,fontSize:12}}>{m.label} → Equity Value</td>
+                    <td style={{padding:"10px 14px",textAlign:"right",color:"#bcc0c6"}}>{fmtM(m.v25)}</td>
+                    <td style={{padding:"10px 14px",textAlign:"right",color:"#e8eaed",fontWeight:700}}>{fmtM(m.vMed)}</td>
+                    <td style={{padding:"10px 14px",textAlign:"right",color:"#bcc0c6"}}>{fmtM(m.v75)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
 
-          <div style={{marginTop:14,padding:"10px 14px",background:"rgba(255,255,255,0.02)",borderRadius:6,fontSize:11,color:"#555"}}>
-            <span style={{color:"#8a8f98"}}>Reference:</span> {target.ticker} current Market Cap = {fmtM(target.mktCap)} · Net Debt = {fmtM(target.totalDebt - target.cash)}
+          {/* Implied Share Price table */}
+          {shares > 0 && (
+            <div style={{overflowX:"auto",marginTop:16}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,fontFamily:"'JetBrains Mono', monospace"}}>
+                <thead><tr>
+                  <th style={{...thSm,textAlign:"left"}}>IMPLIED SHARE PRICE</th>
+                  <th style={thSm}>25TH PCTL</th>
+                  <th style={thSm}>MEDIAN</th>
+                  <th style={thSm}>75TH PCTL</th>
+                </tr></thead>
+                <tbody>
+                  {computed.map((m,i) => {
+                    const medPrice = m.vMed / shares;
+                    const upside = target.price > 0 ? ((medPrice / target.price) - 1) : null;
+                    return (
+                      <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+                        <td style={{padding:"10px 14px",color:m.color,fontWeight:600,fontSize:12}}>{m.label}</td>
+                        <td style={{padding:"10px 14px",textAlign:"right",color:"#bcc0c6"}}>{fmtPrice(m.v25)}</td>
+                        <td style={{padding:"10px 14px",textAlign:"right",color:"#e8eaed",fontWeight:700}}>
+                          {fmtPrice(m.vMed)}
+                          {upside != null && <span style={{marginLeft:8,fontSize:10,color:upside>=0?"#56d4a5":"#ef4444",fontWeight:600}}>
+                            {upside >= 0 ? "▲" : "▼"} {Math.abs(upside*100).toFixed(1)}%
+                          </span>}
+                        </td>
+                        <td style={{padding:"10px 14px",textAlign:"right",color:"#bcc0c6"}}>{fmtPrice(m.v75)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Reference line */}
+          <div style={{marginTop:14,padding:"12px 16px",background:"rgba(255,255,255,0.02)",borderRadius:6,fontSize:11,color:"#555",display:"flex",gap:24,flexWrap:"wrap"}}>
+            <div><span style={{color:"#8a8f98"}}>Current Price:</span> <span style={{color:"#56d4a5",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>${target.price.toFixed(2)}</span></div>
+            <div><span style={{color:"#8a8f98"}}>Market Cap:</span> {fmtM(target.mktCap)}</div>
+            <div><span style={{color:"#8a8f98"}}>Net Debt:</span> {fmtM(netDebt)}</div>
+            <div><span style={{color:"#8a8f98"}}>Shares Out:</span> {fmt(Math.round(shares))}M</div>
           </div>
         </div>
       );
@@ -366,6 +417,7 @@
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
       const [results, setResults] = useState(null);
+      const [fetchTime, setFetchTime] = useState(null);
       const inputRef = useRef(null);
 
       // Run demo on mount
@@ -379,6 +431,7 @@
         if (!demoPeers.length) { setError("No matching demo tickers. Try: AAPL, GOOGL, AMZN, META, CRM, ORCL"); return; }
         const stats = calcStats(demoPeers);
         setResults({target, peers:demoPeers, stats});
+        setFetchTime(new Date());
         setError(null);
       }
 
@@ -417,6 +470,7 @@
 
           const stats = calcStats(validPeers);
           setResults({target:targetData, peers:validPeers, stats});
+          setFetchTime(new Date());
 
           if (msgs.length) setError("Warning: " + msgs.join(" · "));
         } catch(e) {
@@ -541,13 +595,24 @@
                 <KPI label="Peer Count" value={results.peers.length} sub={results.target.period||"LTM"} accent="#ce93d8" />
               </div>
 
+              {/* Timestamp */}
+              {fetchTime && (
+                <div className="fade-up" style={{marginBottom:18,fontSize:11,color:"#555",display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{width:6,height:6,borderRadius:"50%",background:mode==="demo"?"#ffb74d":"#56d4a5"}} />
+                  <span>
+                    {mode==="demo" ? "Demo data (sample figures)" : "Live data via FMP API"} · {fetchTime.toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"})} at {fetchTime.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}
+                    {mode==="live" && ` · ${results.target.period || "LTM"} financials`}
+                  </span>
+                </div>
+              )}
+
               {/* Comps Table */}
               <Section title="Comparable Company Analysis" tag={`${results.peers.length}-Company Peer Set`} accent="#4fc3f7">
                 <CompsTable target={results.target} peers={results.peers} stats={results.stats} />
               </Section>
 
               {/* Implied Valuation */}
-              <Section title="Implied Valuation" tag="Equity Value" accent="#56d4a5">
+              <Section title="Implied Valuation" tag="Equity Value & Share Price" accent="#56d4a5">
                 <ImpliedValuation target={results.target} stats={results.stats} />
               </Section>
 
