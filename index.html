@@ -53,25 +53,35 @@
     };
 
     // ─── FMP API FETCHER ─────────────────────────────────────────────
-    const FMP_BASE = "https://financialmodelingprep.com/api/v3";
+    const FMP_BASE = "https://financialmodelingprep.com/stable";
 
     async function fetchCompanyData(ticker, apiKey) {
-      const headers = {"Content-Type":"application/json"};
       const [profileRes, isRes, bsRes] = await Promise.all([
-        fetch(`${FMP_BASE}/profile/${ticker}?apikey=${apiKey}`),
-        fetch(`${FMP_BASE}/income-statement/${ticker}?limit=1&apikey=${apiKey}`),
-        fetch(`${FMP_BASE}/balance-sheet-statement/${ticker}?limit=1&apikey=${apiKey}`),
+        fetch(`${FMP_BASE}/profile?symbol=${ticker}&apikey=${apiKey}`),
+        fetch(`${FMP_BASE}/income-statement?symbol=${ticker}&limit=1&apikey=${apiKey}`),
+        fetch(`${FMP_BASE}/balance-sheet-statement?symbol=${ticker}&limit=1&apikey=${apiKey}`),
       ]);
+
+      if (!profileRes.ok) throw new Error(`API returned ${profileRes.status} for ${ticker}. Check your API key.`);
+
       const profile = await profileRes.json();
       const income = await isRes.json();
       const balance = await bsRes.json();
 
-      if (!profile?.[0]) throw new Error(`No data found for ${ticker}`);
-      if (profile?.[0]?.["Error Message"] || profile?.["Error Message"]) throw new Error(`API error — check your API key`);
+      // Debug: log raw responses to console so you can inspect
+      console.log(`[${ticker}] profile:`, profile);
+      console.log(`[${ticker}] income:`, income);
+      console.log(`[${ticker}] balance:`, balance);
 
-      const p = profile[0];
-      const is = income[0] || {};
-      const bs = balance[0] || {};
+      // Handle error messages from FMP
+      const errMsg = profile?.["Error Message"] || (Array.isArray(profile) && profile[0]?.["Error Message"]);
+      if (errMsg) throw new Error(`FMP error for ${ticker}: ${errMsg}`);
+
+      const p = Array.isArray(profile) ? profile[0] : profile;
+      if (!p || (!p.companyName && !p.symbol)) throw new Error(`No data found for ${ticker}. Check the ticker symbol.`);
+
+      const is = Array.isArray(income) ? income[0] || {} : income || {};
+      const bs = Array.isArray(balance) ? balance[0] || {} : balance || {};
 
       return {
         name: p.companyName || ticker,
