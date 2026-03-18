@@ -43,13 +43,13 @@
 
     // ─── DEMO DATA (real-ish figures for showcase) ───────────────────
     const DEMO_DATA = {
-      MSFT: {name:"Microsoft Corp",ticker:"MSFT",price:415.30,mktCap:3087000,totalDebt:59000,cash:75500,revenue:245122,ebitda:123456,netIncome:88136,sector:"Technology",period:"FY2024"},
-      AAPL: {name:"Apple Inc",ticker:"AAPL",price:228.50,mktCap:3450000,totalDebt:111000,cash:65000,revenue:391035,ebitda:134000,netIncome:100913,sector:"Technology",period:"FY2024"},
-      GOOGL: {name:"Alphabet Inc",ticker:"GOOGL",price:175.60,mktCap:2170000,totalDebt:29000,cash:111000,revenue:350018,ebitda:115000,netIncome:100681,sector:"Technology",period:"FY2024"},
-      AMZN: {name:"Amazon.com Inc",ticker:"AMZN",price:205.70,mktCap:2170000,totalDebt:165000,cash:78700,revenue:638000,ebitda:115000,netIncome:59248,sector:"Technology",period:"FY2024"},
-      META: {name:"Meta Platforms Inc",ticker:"META",price:595.40,mktCap:1510000,totalDebt:37000,cash:58000,revenue:164710,ebitda:72600,netIncome:62360,sector:"Technology",period:"FY2024"},
-      CRM:  {name:"Salesforce Inc",ticker:"CRM",price:272.30,mktCap:264000,totalDebt:12500,cash:14200,revenue:37900,ebitda:13100,netIncome:8500,sector:"Technology",period:"FY2024"},
-      ORCL: {name:"Oracle Corp",ticker:"ORCL",price:168.90,mktCap:467000,totalDebt:88600,cash:11300,revenue:56100,ebitda:25800,netIncome:13000,sector:"Technology",period:"FY2024"},
+      MSFT: {name:"Microsoft Corp",ticker:"MSFT",price:415.30,mktCap:3087000,totalDebt:59000,cash:75500,bookValue:268000,revenue:245122,ebitda:123456,netIncome:88136,sector:"Technology",period:"FY2024"},
+      AAPL: {name:"Apple Inc",ticker:"AAPL",price:228.50,mktCap:3450000,totalDebt:111000,cash:65000,bookValue:57000,revenue:391035,ebitda:134000,netIncome:100913,sector:"Technology",period:"FY2024"},
+      GOOGL: {name:"Alphabet Inc",ticker:"GOOGL",price:175.60,mktCap:2170000,totalDebt:29000,cash:111000,bookValue:315000,revenue:350018,ebitda:115000,netIncome:100681,sector:"Technology",period:"FY2024"},
+      AMZN: {name:"Amazon.com Inc",ticker:"AMZN",price:205.70,mktCap:2170000,totalDebt:165000,cash:78700,bookValue:259000,revenue:638000,ebitda:115000,netIncome:59248,sector:"Technology",period:"FY2024"},
+      META: {name:"Meta Platforms Inc",ticker:"META",price:595.40,mktCap:1510000,totalDebt:37000,cash:58000,bookValue:165000,revenue:164710,ebitda:72600,netIncome:62360,sector:"Technology",period:"FY2024"},
+      CRM:  {name:"Salesforce Inc",ticker:"CRM",price:272.30,mktCap:264000,totalDebt:12500,cash:14200,bookValue:60000,revenue:37900,ebitda:13100,netIncome:8500,sector:"Technology",period:"FY2024"},
+      ORCL: {name:"Oracle Corp",ticker:"ORCL",price:168.90,mktCap:467000,totalDebt:88600,cash:11300,bookValue:15000,revenue:56100,ebitda:25800,netIncome:13000,sector:"Technology",period:"FY2024"},
     };
 
     // ─── FMP API FETCHER ─────────────────────────────────────────────
@@ -101,6 +101,7 @@
         mktCap: Math.round((p.marketCap || p.mktCap || 0) / 1e6),
         totalDebt: Math.round((bs.totalDebt || bs.longTermDebt || 0) / 1e6),
         cash: Math.round((bs.cashAndCashEquivalents || bs.cashAndShortTermInvestments || bs.totalCash || 0) / 1e6),
+        bookValue: Math.round((bs.totalStockholdersEquity || bs.totalEquity || 0) / 1e6),
         revenue: Math.round((is.revenue || 0) / 1e6),
         ebitda: Math.round((is.ebitda || 0) / 1e6),
         netIncome: Math.round((is.netIncome || 0) / 1e6),
@@ -129,8 +130,10 @@
         evEbitda: c.ebitda > 0 ? ev / c.ebitda : null,
         evRev: c.revenue > 0 ? ev / c.revenue : null,
         pe: c.netIncome > 0 ? c.mktCap / c.netIncome : null,
+        pbv: c.bookValue > 0 ? c.mktCap / c.bookValue : null,
         ebitdaMargin: c.revenue > 0 ? c.ebitda / c.revenue : null,
         netMargin: c.revenue > 0 ? c.netIncome / c.revenue : null,
+        roe: (c.netIncome > 0 && c.bookValue > 0) ? c.netIncome / c.bookValue : null,
       };
     }
 
@@ -144,11 +147,13 @@
       const evEbitdas = peers.map(p=>p.evEbitda);
       const evRevs = peers.map(p=>p.evRev);
       const pes = peers.map(p=>p.pe);
+      const pbvs = peers.map(p=>p.pbv);
 
       return {
         evEbitda: {mean:mean(evEbitdas), med:median(evEbitdas), p25:p25(evEbitdas), p75:p75(evEbitdas)},
         evRev: {mean:mean(evRevs), med:median(evRevs), p25:p25(evRevs), p75:p75(evRevs)},
         pe: {mean:mean(pes), med:median(pes), p25:p25(pes), p75:p75(pes)},
+        pbv: {mean:mean(pbvs), med:median(pbvs), p25:p25(pbvs), p75:p75(pbvs)},
       };
     }
 
@@ -199,20 +204,22 @@
           <td style={tdNum}>{fmtM(c.revenue)}</td>
           <td style={tdNum}>{fmtM(c.ebitda)}</td>
           <td style={tdNum}>{c.ebitdaMargin!=null?pct(c.ebitdaMargin):"—"}</td>
+          <td style={tdNum}>{c.roe!=null?pct(c.roe):"—"}</td>
           <td style={tdMult("#4fc3f7")}>{c.evEbitda!=null?c.evEbitda.toFixed(1)+"x":"—"}</td>
           <td style={tdMult("#81c784")}>{c.evRev!=null?c.evRev.toFixed(2)+"x":"—"}</td>
           <td style={tdMult("#ffb74d")}>{c.pe!=null?c.pe.toFixed(1)+"x":"—"}</td>
+          <td style={tdMult("#e091d2")}>{c.pbv!=null?c.pbv.toFixed(2)+"x":"—"}</td>
         </tr>
       );
 
-      const statRow = (label, evEb, evR, peV) => ({
-        mktCap:null,ev:null,revenue:null,ebitda:null,ebitdaMargin:null,
-        evEbitda:evEb,evRev:evR,pe:peV
+      const statRow = (label, evEb, evR, peV, pbvV) => ({
+        mktCap:null,ev:null,revenue:null,ebitda:null,ebitdaMargin:null,roe:null,
+        evEbitda:evEb,evRev:evR,pe:peV,pbv:pbvV
       });
 
       return (
         <div style={{overflowX:"auto",borderRadius:8,border:"1px solid rgba(255,255,255,0.06)"}}>
-          <table style={{borderCollapse:"collapse",minWidth:800}}>
+          <table style={{borderCollapse:"collapse",minWidth:900}}>
             <thead><tr>
               <th style={{...thStyle,textAlign:"left",position:"sticky",left:0,background:"rgba(10,12,14,0.95)",zIndex:2}}>Company</th>
               <th style={thStyle}>Mkt Cap</th>
@@ -220,19 +227,21 @@
               <th style={thStyle}>Revenue</th>
               <th style={thStyle}>EBITDA</th>
               <th style={thStyle}>Margin</th>
+              <th style={thStyle}>ROE</th>
               <th style={{...thStyle,color:"#4fc3f7"}}>EV/EBITDA</th>
               <th style={{...thStyle,color:"#81c784"}}>EV/Rev</th>
               <th style={{...thStyle,color:"#ffb74d"}}>P/E</th>
+              <th style={{...thStyle,color:"#e091d2"}}>P/BV</th>
             </tr></thead>
             <tbody>
               {renderRow(target, true)}
-              <tr><td colSpan={9} style={{padding:0,height:8}}></td></tr>
+              <tr><td colSpan={11} style={{padding:0,height:8}}></td></tr>
               {peers.map(p => renderRow(p, false))}
-              <tr><td colSpan={9} style={{padding:0,height:2,borderTop:"2px solid rgba(255,255,255,0.08)"}}></td></tr>
-              {renderRow(statRow("Mean", stats.evEbitda.mean, stats.evRev.mean, stats.pe.mean), false, true, "Mean")}
-              {renderRow(statRow("Median", stats.evEbitda.med, stats.evRev.med, stats.pe.med), false, true, "Median")}
-              {renderRow(statRow("25th %ile", stats.evEbitda.p25, stats.evRev.p25, stats.pe.p25), false, true, "25th Pctl")}
-              {renderRow(statRow("75th %ile", stats.evEbitda.p75, stats.evRev.p75, stats.pe.p75), false, true, "75th Pctl")}
+              <tr><td colSpan={11} style={{padding:0,height:2,borderTop:"2px solid rgba(255,255,255,0.08)"}}></td></tr>
+              {renderRow(statRow("Mean", stats.evEbitda.mean, stats.evRev.mean, stats.pe.mean, stats.pbv.mean), false, true, "Mean")}
+              {renderRow(statRow("Median", stats.evEbitda.med, stats.evRev.med, stats.pe.med, stats.pbv.med), false, true, "Median")}
+              {renderRow(statRow("25th %ile", stats.evEbitda.p25, stats.evRev.p25, stats.pe.p25, stats.pbv.p25), false, true, "25th Pctl")}
+              {renderRow(statRow("75th %ile", stats.evEbitda.p75, stats.evRev.p75, stats.pe.p75, stats.pbv.p75), false, true, "75th Pctl")}
             </tbody>
           </table>
         </div>
@@ -247,6 +256,7 @@
         {label:"EV/EBITDA",color:"#4fc3f7",p25:stats.evEbitda.p25,med:stats.evEbitda.med,p75:stats.evEbitda.p75,base:target.ebitda,isEV:true},
         {label:"EV/Revenue",color:"#81c784",p25:stats.evRev.p25,med:stats.evRev.med,p75:stats.evRev.p75,base:target.revenue,isEV:true},
         {label:"P/E",color:"#ffb74d",p25:stats.pe.p25,med:stats.pe.med,p75:stats.pe.p75,base:target.netIncome,isEV:false},
+        {label:"P/BV",color:"#e091d2",p25:stats.pbv.p25,med:stats.pbv.med,p75:stats.pbv.p75,base:target.bookValue,isEV:false},
       ];
 
       return (
@@ -292,6 +302,7 @@
         {label:"EV/EBITDA",color:"#4fc3f7",low:stats.evEbitda.p25*target.ebitda-netDebt,med:stats.evEbitda.med*target.ebitda-netDebt,high:stats.evEbitda.p75*target.ebitda-netDebt},
         {label:"EV/Revenue",color:"#81c784",low:stats.evRev.p25*target.revenue-netDebt,med:stats.evRev.med*target.revenue-netDebt,high:stats.evRev.p75*target.revenue-netDebt},
         {label:"P/E",color:"#ffb74d",low:stats.pe.p25*target.netIncome,med:stats.pe.med*target.netIncome,high:stats.pe.p75*target.netIncome},
+        {label:"P/BV",color:"#e091d2",low:stats.pbv.p25*target.bookValue,med:stats.pbv.med*target.bookValue,high:stats.pbv.p75*target.bookValue},
       ].filter(r=>r.low&&r.high&&!isNaN(r.low)&&!isNaN(r.high));
 
       if (!ranges.length) return <div style={{color:"#555",fontSize:12}}>Insufficient data for football field.</div>;
@@ -331,11 +342,11 @@
 
     // ─── CSV EXPORT ──────────────────────────────────────────────────
     function exportCSV(target, peers, stats) {
-      const header = ["Company","Ticker","Mkt Cap ($M)","EV ($M)","Revenue ($M)","EBITDA ($M)","Net Income ($M)","EV/EBITDA","EV/Revenue","P/E"];
-      const row = c => [c.name,c.ticker,c.mktCap,c.ev,c.revenue,c.ebitda,c.netIncome,c.evEbitda?.toFixed(2)||"",c.evRev?.toFixed(2)||"",c.pe?.toFixed(2)||""];
+      const header = ["Company","Ticker","Mkt Cap ($M)","EV ($M)","Revenue ($M)","EBITDA ($M)","Net Income ($M)","Book Value ($M)","ROE","EV/EBITDA","EV/Revenue","P/E","P/BV"];
+      const row = c => [c.name,c.ticker,c.mktCap,c.ev,c.revenue,c.ebitda,c.netIncome,c.bookValue||"",c.roe!=null?(c.roe*100).toFixed(1)+"%":"",c.evEbitda?.toFixed(2)||"",c.evRev?.toFixed(2)||"",c.pe?.toFixed(2)||"",c.pbv?.toFixed(2)||""];
       const rows = [header, row(target), [], ...peers.map(row), [],
-        ["Mean","","","","","","",stats.evEbitda.mean?.toFixed(2)||"",stats.evRev.mean?.toFixed(2)||"",stats.pe.mean?.toFixed(2)||""],
-        ["Median","","","","","","",stats.evEbitda.med?.toFixed(2)||"",stats.evRev.med?.toFixed(2)||"",stats.pe.med?.toFixed(2)||""],
+        ["Mean","","","","","","","","",stats.evEbitda.mean?.toFixed(2)||"",stats.evRev.mean?.toFixed(2)||"",stats.pe.mean?.toFixed(2)||"",stats.pbv.mean?.toFixed(2)||""],
+        ["Median","","","","","","","","",stats.evEbitda.med?.toFixed(2)||"",stats.evRev.med?.toFixed(2)||"",stats.pe.med?.toFixed(2)||"",stats.pbv.med?.toFixed(2)||""],
       ];
       const csv = rows.map(r=>r.join(",")).join("\n");
       const blob = new Blob([csv],{type:"text/csv"});
